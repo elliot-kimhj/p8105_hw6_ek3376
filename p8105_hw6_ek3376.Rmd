@@ -12,6 +12,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r libraries}
 library(tidyverse)
 library(rvest)
+library(tidyr)
+library(dplyr)
+library(modelr)
 ```
 
 ## **Problem 2**
@@ -57,7 +60,7 @@ baltimore_results = baltimore_model |>
 baltimore_results
 ```
 
-Below we run a glm for each city in the dataset, and extract the adjusted odds ratio and CI for solving homicides comparing male and female victims. We then create a plot that shows the estimated ORs and CIs for each city and oragnize cities according to estiamte OR.
+Below we run a glm for each city in the dataset, and extract the adjusted odds ratio and CI for solving homicides comparing male and female victims. We then create a plot that shows the estimated ORs and CIs for each city and organize cities according to estimate OR. Based on the plot, Albuquerque, NM appears to have the greatest OR, meaning that male victims are much more likely to have their homicides solved compared to female victims, after adjusting for age and race. Conversely, New York, NY appears to have the smallest. Most cities have an OR less than 1, suggesting that male victims are less likely to have their homicides solved compared to female victims. 
 
 ```{r}
 city_results = wp_homicide_data |>
@@ -86,4 +89,91 @@ city_results_plot = city_results |>
   )
 
 city_results_plot
+```
+
+## **Problem 3**
+
+Below we import the birthweight dataset and clean the data for regression analysis. 
+
+```{r}
+birthweight = read_csv("./data/birthweight.csv", na = c(".", "NA", "", "Unknown")) |>
+  janitor::clean_names() |>
+  mutate(
+    babysex = case_when(
+      babysex == 1 ~ "Male",
+      babysex == 2 ~ "Female"),
+    frace = case_when(
+      frace == 1 ~ "White",
+      frace == 2 ~ "Black",
+      frace == 3 ~ "Asian",
+      frace == 4 ~ "Puerto Rican",
+      frace == 8 ~ "Other",
+      TRUE ~ NA),
+    mrace = case_when(
+      mrace == 1 ~ "White",
+      mrace == 2 ~ "Black",
+      mrace == 3 ~ "Asian",
+      mrace == 4 ~ "Puerto Rican",
+      mrace == 8 ~ "Other",
+      TRUE ~ NA),
+    malform = case_when(
+      malform == 0 ~ "Absent",
+      malform == 1 ~ "Presnet",
+      TRUE ~ NA)) |>
+  drop_na()
+```
+Below we propose a linear regression model to observe how a mother's height, pre-pregnancy BMI, smoking status, and weight gain during pregnancy as predictors for birthweight. 
+
+```{r}
+birthweight_model = lm(bwt ~ mheight + ppbmi + smoken + wtgain, data = birthweight)
+
+summary(birthweight_model)
+
+birthweight_results = birthweight |>
+  add_predictions(birthweight_model, var = "predicted_bwt") |>
+  add_residuals(birthweight_model, var = "residuals_bwt")
+
+ggplot(birthweight_results, aes(x = predicted_bwt, y = residuals_bwt)) + 
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "Residuals vs. Fitted Values for Birthweight Model", x = "Fitted Values", y = "Residuals"
+  )
+```
+Below we compare my model with two other models: one using length at birth and gestational age as predictors (main effects only) and one using head circumference, length, sex, and all interactions between these. Based on the plots, the interaction model appears to be better at predicting birthweight, given the lower median RMSE. However, the model I predicted has the smallest width, suggesting that it may have better performance. Further investigation is required to determine how to optimize my model. 
+
+```{r}
+main_model = lm(bwt ~ blength + gaweeks, data = birthweight)
+
+interaction_model = lm(bwt ~ bhead * blength * babysex, data = birthweight)
+
+
+cv_bwt =
+  crossv_mc(birthweight, 100)
+
+cv_df =
+  cv_bwt |>
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+cv_df = 
+  cv_df |>
+  mutate(
+    birth_model = map(train, \(df) lm(bwt ~ mheight + ppbmi + smoken + wtgain, data = df)),
+    main_model = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    interaction_model = map(train, \(df) lm(bwt ~ bhead * blength * babysex, data = df)),
+    rmse1 = map2_dbl(birth_model, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse2 = map2_dbl(main_model, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse3 = map2_dbl(interaction_model, test, \(mod, df) rmse(model = mod, data = df))
+  )
+
+cv_df |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_") |>
+  mutate(model = fct_inorder(model)) |>
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
 ```
